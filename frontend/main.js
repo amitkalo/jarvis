@@ -78,7 +78,19 @@ function startBackend() {
 function stopBackend() {
   if (backend && !backend.killed) {
     console.log("[Jarvis] Stopping backend…");
-    backend.kill();
+    if (process.platform === "win32" && backend.pid) {
+      // Kill the entire process tree so uv.exe + its python child both die.
+      // backend.kill() only kills the immediate child (uv.exe), leaving
+      // Python running with the mic open.
+      try {
+        require("child_process").execSync(
+          `taskkill /F /T /PID ${backend.pid}`,
+          { stdio: "ignore" }
+        );
+      } catch (_) { /* already gone */ }
+    } else {
+      backend.kill();
+    }
     backend = null;
   }
 }
@@ -171,5 +183,5 @@ ipcMain.on("set-ignore-mouse-events", (_, ignore) => {
 ipcMain.on("restart-backend", () => {
   console.log("[Jarvis] Restarting backend for code reload…");
   stopBackend();
-  setTimeout(() => startBackend(), 1800);   // give the old process time to release the port
+  setTimeout(() => startBackend(), 2000);   // give the killed tree time to release the port
 });
