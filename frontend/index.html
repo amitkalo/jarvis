@@ -71,14 +71,24 @@
       <span class="hint">Always listening  ·  <em>Ctrl+Shift+J</em></span>
     </main>
 
-    <!-- Right panel: conversation log -->
+    <!-- Right panel: tabbed (COMM LOG | ACTIVITY) -->
     <aside id="panel-right">
       <div class="p-header">
-        COMM LOG
-        <button class="clear-btn" id="clear-btn" title="Clear conversation">CLR</button>
+        <div class="tab-bar">
+          <button class="tab-btn active" id="tab-log"      data-tab="log">LOG</button>
+          <button class="tab-btn"        id="tab-activity" data-tab="activity">ACTIVITY</button>
+        </div>
+        <button class="clear-btn" id="clear-btn" title="Clear">CLR</button>
       </div>
-      <div class="p-body" id="comm-log">
+
+      <!-- Tab: conversation log -->
+      <div class="p-body tab-pane active" id="comm-log">
         <!-- Conversation messages appended by renderer.js -->
+      </div>
+
+      <!-- Tab: live activity / tool feed -->
+      <div class="p-body tab-pane" id="activity-log" style="display:none;">
+        <!-- Activity entries appended by renderer.js -->
       </div>
     </aside>
 

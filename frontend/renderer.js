@@ -29,11 +29,72 @@ const queryText      = document.getElementById("query-text");
 const operatorStatus = document.getElementById("operator-status");
 const triggerBtn     = document.getElementById("trigger-btn");
 const commLog        = document.getElementById("comm-log");
+const activityLog    = document.getElementById("activity-log");
 const ampFill        = document.getElementById("amp-fill");
 const svalTool       = document.getElementById("sval-tool");
 const svalDate       = document.getElementById("sval-date");
 const svalUptime     = document.getElementById("sval-uptime");
 const clockEl        = document.getElementById("clock");
+
+// ── Tab switching ──────────────────────────────────────────────────────────────
+const tabBtns = document.querySelectorAll(".tab-btn");
+tabBtns.forEach(btn => {
+  btn.addEventListener("click", () => {
+    tabBtns.forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    const tab = btn.dataset.tab;
+    commLog.style.display    = tab === "log"      ? "flex" : "none";
+    activityLog.style.display = tab === "activity" ? "flex" : "none";
+  });
+});
+
+// ── Activity feed ──────────────────────────────────────────────────────────────
+const ACT_MAX = 120;   // max entries before oldest are pruned
+
+function _actTs() {
+  const n = new Date();
+  return `${String(n.getHours()).padStart(2,"0")}:${String(n.getMinutes()).padStart(2,"0")}:${String(n.getSeconds()).padStart(2,"0")}`;
+}
+
+function addActivity(kind, icon, body) {
+  // kind: act-think | act-tool | act-result | act-answer | act-state | act-error
+  const row  = document.createElement("div");
+  row.className = `act ${kind}`;
+
+  const ts   = document.createElement("span");
+  ts.className = "act-ts";
+  ts.textContent = _actTs();
+
+  const ic   = document.createElement("span");
+  ic.className = "act-icon";
+  ic.textContent = icon;
+
+  const bd   = document.createElement("span");
+  bd.className = "act-body";
+  bd.textContent = body;
+
+  row.appendChild(ts);
+  row.appendChild(ic);
+  row.appendChild(bd);
+  activityLog.appendChild(row);
+
+  // Prune old entries
+  while (activityLog.children.length > ACT_MAX) {
+    activityLog.removeChild(activityLog.firstChild);
+  }
+  activityLog.scrollTop = activityLog.scrollHeight;
+
+  // Also badge the tab if not currently visible
+  const tabActivity = document.getElementById("tab-activity");
+  if (!tabActivity.classList.contains("active")) {
+    tabActivity.style.color = "var(--cyan)";
+    clearTimeout(tabActivity._badge);
+    tabActivity._badge = setTimeout(() => {
+      if (!tabActivity.classList.contains("active"))
+        tabActivity.style.color = "";
+    }, 2000);
+  }
+}
 
 // ── Clock + uptime ─────────────────────────────────────────────────────────────
 const sessionStart = Date.now();
@@ -463,24 +524,26 @@ function connect() {
       case "transcript":
         setQueryText(msg.text);
         addMessage("you", msg.text);
+        addActivity("act-state", "🎤", `You: "${msg.text}"`);
         break;
 
       case "response":
         addMessage("jarvis", msg.text, _respondingTo);
+        addActivity("act-answer", "💬", msg.text);
         _respondingTo = "";
         break;
 
       case "responding_to":
-        // Background task finished — store what it's answering before response arrives
         _respondingTo = msg.text || "";
         setQueryText("↳ " + _respondingTo);
+        addActivity("act-think", "↳", `Answering: "${(msg.text || "").slice(0, 60)}"`);
         break;
 
       case "bg_thinking":
-        // Show parallel task processing indicator
         if (!operatorRunning) {
           statusLabel.textContent = `Processing: "${(msg.query || "").slice(0, 35)}…"`;
         }
+        addActivity("act-think", "⚙", `Turn ${msg.tid ?? ""}: "${(msg.query || "").slice(0, 55)}"`);
         break;
 
       case "amplitude":
@@ -489,31 +552,39 @@ function connect() {
 
       case "ready":
         applyState("idle");
+        addActivity("act-state", "✓", "Pipeline ready");
         break;
 
       case "log":
         statusLabel.textContent = msg.text || "";
+        addActivity("act-state", "ℹ", msg.text || "");
         break;
 
       case "error":
         statusLabel.textContent = "ERR: " + (msg.text || "").slice(0, 40);
         console.error("[Jarvis]", msg.text);
+        addActivity("act-error", "✗", msg.text || "error");
         break;
 
       case "tool_use":
         statusLabel.textContent = `Running: ${msg.name}`;
         svalTool.textContent = msg.name || "—";
+        addActivity("act-tool", "🔧", `${msg.name}(${msg.args ? JSON.stringify(msg.args).slice(0,80) : "…"})`);
         if (msg.name === "run_os_task") startOperatorMode();
         break;
 
-      case "tool_result":
+      case "tool_result": {
+        const preview = (msg.result || "").slice(0, 100).replace(/\n/g, " ");
+        addActivity("act-result", "✓", preview || "(done)");
         if (operatorRunning && msg.name === "run_os_task") stopOperatorMode();
         if (!operatorRunning) statusLabel.textContent = STATE_LABELS.thinking;
         break;
+      }
 
       case "operator_status":
         if (!operatorRunning) startOperatorMode();
         showOperatorStatus(msg.text || "");
+        addActivity("act-tool", "🖥", msg.text || "");
         break;
 
       case "reload":
@@ -549,6 +620,11 @@ function sendTrigger() {
 }
 
 function sendClearHistory() {
+  const activeTab = document.querySelector(".tab-btn.active")?.dataset?.tab;
+  if (activeTab === "activity") {
+    activityLog.innerHTML = "";
+    return;
+  }
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: "clear_history" }));
     commLog.innerHTML = "";

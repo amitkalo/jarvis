@@ -295,6 +295,30 @@ body.state-listening .mic-btn {
   color: rgba(0, 212, 255, 0.42);
 }
 
+/* ── TAB BAR (right panel header) ──────────────────────────────── */
+.tab-bar {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  flex: 1;
+}
+.tab-btn {
+  -webkit-app-region: no-drag;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--dim);
+  font-size: 7px;
+  letter-spacing: 2px;
+  font-family: var(--font);
+  padding: 1px 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+  border-radius: 2px;
+}
+.tab-btn:hover  { color: var(--cyan); border-color: var(--border); }
+.tab-btn.active { color: var(--cyan); border-color: var(--cyan);
+                  text-shadow: 0 0 8px rgba(0,212,255,0.4); }
+
 /* ── COMM LOG (right panel) ─────────────────────────────────────── */
 #panel-right .p-body {
   overflow-y: auto;
@@ -391,3 +415,49 @@ body.state-operator .operator-status {
 :root { --c-operator: #00ff99; }
 body.state-operator .pulse-dot  { background: var(--c-operator); animation: pulse 0.5s ease-in-out infinite; }
 body.state-operator .status-label { color: var(--c-operator); text-shadow: 0 0 10px rgba(0,255,153,0.4); }
+
+/* ── ACTIVITY FEED ───────────────────────────────────────────────── */
+#activity-log {
+  gap: 3px !important;
+}
+
+.act {
+  display: grid;
+  grid-template-columns: 38px 14px 1fr;
+  gap: 0 4px;
+  align-items: baseline;
+  font-size: 8.5px;
+  line-height: 1.55;
+  animation: msgIn 0.2s ease;
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+.act-ts   { color: rgba(80,120,160,0.45); font-variant-numeric: tabular-nums; text-align: right; }
+.act-icon { text-align: center; font-size: 9px; }
+.act-body { color: var(--dim); word-break: break-all; overflow: hidden;
+            display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+
+/* per-type colours */
+.act.act-think  .act-icon { color: var(--c-think);  }
+.act.act-think  .act-body { color: rgba(180,120,255,0.75); }
+
+.act.act-tool   .act-icon { color: var(--cyan);    }
+.act.act-tool   .act-body { color: rgba(0,212,255,0.80); font-family: var(--font); }
+
+.act.act-result .act-icon { color: var(--c-listen); }
+.act.act-result .act-body { color: rgba(0,232,204,0.60); font-family: var(--font); }
+
+.act.act-answer .act-icon { color: var(--c-speak); }
+.act.act-answer .act-body { color: var(--text); }
+
+.act.act-state  .act-icon { color: var(--dim); }
+.act.act-state  .act-body { color: rgba(100,150,200,0.50); font-style: italic; }
+
+.act.act-error  .act-icon { color: #ff3355; }
+.act.act-error  .act-body { color: rgba(255,51,85,0.80); }
+
+/* scrollbar shared with comm-log */
+#activity-log::-webkit-scrollbar { width: 2px; }
+#activity-log::-webkit-scrollbar-track { background: transparent; }
+#activity-log::-webkit-scrollbar-thumb { background: rgba(0,212,255,0.2); border-radius: 1px; }
