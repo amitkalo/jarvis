@@ -1,0 +1,16 @@
+{
+  "name": "jarvis-ui",
+  "version": "1.0.0",
+  "description": "Jarvis AI Assistant – Desktop UI",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "electron": "^33.0.0"
+  },
+  "author": "Jarvis",
+  "license": "MIT"
+}

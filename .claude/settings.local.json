@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm --version)",
+      "Bash(python -m py_compile backend/main.py)",
+      "Bash(pip install *)",
+      "Bash(python -c ' *)",
+      "PowerShell(Get-Process python -ErrorAction SilentlyContinue)",
+      "PowerShell(Stop-Process -Force 2>$null)",
+      "PowerShell(netstat -ano 2>$null)",
+      "Bash(python -m py_compile \"C:/Users/Amit/jarvis/backend/main.py\")"
+    ]
+  }
+}

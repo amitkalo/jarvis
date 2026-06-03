@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>J.A.R.V.I.S</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <!-- ── TOP BAR: drag + branding + status + clock + controls ── -->
+  <header id="titlebar">
+    <div class="bar-left">
+      <span class="logo">J.A.R.V.I.S</span>
+      <span class="tag">LOCAL AI</span>
+    </div>
+    <div class="bar-center">
+      <span class="pulse-dot" id="pulse-dot"></span>
+      <span class="status-label" id="status-label">INITIALISING</span>
+    </div>
+    <div class="bar-right">
+      <span class="clock" id="clock">--:--:--</span>
+      <button class="wc-btn" id="btn-minimize" title="Minimize">—</button>
+      <button class="wc-btn wc-close" id="btn-close" title="Close">✕</button>
+    </div>
+  </header>
+
+  <!-- ── CORNER BRACKETS ── -->
+  <div class="corner corner-tl"></div>
+  <div class="corner corner-tr"></div>
+  <div class="corner corner-bl"></div>
+  <div class="corner corner-br"></div>
+
+  <!-- ── SCAN LINE (decorative) ── -->
+  <div class="scanline"></div>
+
+  <!-- ── MAIN HUD ── -->
+  <div id="hud-main">
+
+    <!-- Left panel: system status -->
+    <aside id="panel-left">
+      <div class="p-header">SYS STATUS</div>
+      <div class="p-body">
+        <div class="srow"><span class="slbl">DATE</span><span class="sval" id="sval-date">—</span></div>
+        <div class="srow"><span class="slbl">SESSION</span><span class="sval" id="sval-uptime">00:00</span></div>
+        <div class="srow"><span class="slbl">AI CORE</span><span class="sval">CLAUDE</span></div>
+        <div class="srow"><span class="slbl">VOICE</span><span class="sval">PIPER · EN</span></div>
+        <div class="sdivider"></div>
+        <div class="srow"><span class="slbl">MODE</span><span class="sval on">ALWAYS ON</span></div>
+        <div class="srow"><span class="slbl">MIC LEVEL</span></div>
+        <div class="amp-bar"><div class="amp-fill" id="amp-fill"></div></div>
+        <div class="sdivider"></div>
+        <div class="srow"><span class="slbl">LAST TOOL</span></div>
+        <div class="tool-val" id="sval-tool">—</div>
+      </div>
+    </aside>
+
+    <!-- Center: Three.js orb + status + mic control -->
+    <main id="orb-area">
+      <div id="canvas-wrap"></div>
+      <p class="query-text" id="query-text"></p>
+      <p class="operator-status" id="operator-status"></p>
+      <button class="mic-btn" id="trigger-btn" title="Tap to speak  (Ctrl+Shift+J)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round">
+          <rect x="9" y="2" width="6" height="12" rx="3"/>
+          <path d="M5 10a7 7 0 0 0 14 0"/>
+          <line x1="12" y1="19" x2="12" y2="23"/>
+          <line x1="8"  y1="23" x2="16" y2="23"/>
+        </svg>
+      </button>
+      <span class="hint">Always listening  ·  <em>Ctrl+Shift+J</em></span>
+    </main>
+
+    <!-- Right panel: conversation log -->
+    <aside id="panel-right">
+      <div class="p-header">
+        COMM LOG
+        <button class="clear-btn" id="clear-btn" title="Clear conversation">CLR</button>
+      </div>
+      <div class="p-body" id="comm-log">
+        <!-- Conversation messages appended by renderer.js -->
+      </div>
+    </aside>
+
+  </div>
+
+  <!-- Three.js from CDN (no bundler needed) -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+  <script src="renderer.js"></script>
+</body>
+</html>

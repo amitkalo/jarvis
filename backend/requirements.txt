@@ -1,0 +1,31 @@
+# ── Pipecat voice pipeline (core of the new architecture) ────────────────────
+pipecat-ai>=0.0.50           # pipeline framework
+pyaudio>=0.2.14              # required by LocalAudioTransport
+
+# ── AI / ML ───────────────────────────────────────────────────────────────────
+anthropic>=0.49.0            # Claude API (also pulled by pipecat-ai[anthropic])
+faster-whisper>=1.0.0        # STT (also pulled by pipecat-ai[whisper])
+piper-tts>=1.2.0             # local TTS (also pulled by pipecat-ai[piper])
+openwakeword>=0.6.0          # bundles silero_vad.onnx — keep for onnxruntime dep
+
+# ── Web / transport ───────────────────────────────────────────────────────────
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+python-dotenv>=1.0.0
+
+# ── OS tools (backend/tools.py) ───────────────────────────────────────────────
+pyautogui>=0.9.54
+psutil>=6.0.0
+Pillow>=10.4.0
+duckduckgo-search>=6.0.0
+pycaw>=20181226
+comtypes>=1.2.0
+pyperclip>=1.8.2
+requests>=2.32.0
+pygetwindow>=0.0.9
+pywin32>=306
+
+# ── Audio utilities ───────────────────────────────────────────────────────────
+numpy>=1.26.0
+scipy>=1.11.0
+miniaudio>=1.60             # used by tools.py audio helpers if any
