@@ -770,6 +770,87 @@ def clear_chat_log() -> str:
     return "Chat log cleared."
 
 
+# ─── Long-term memory (persistent knowledge base) ────────────────────────────
+# Stored in jarvis_memory.json under "facts". Tiny JSON, no ML model — recall is
+# instant. Claude injects relevant facts into its own prompt every turn, so it
+# remembers things about Kalo across sessions/restarts.
+
+_MEMORY_FILE = Path(__file__).parent.parent / "jarvis_memory.json"
+
+def _load_mem() -> dict:
+    try:
+        if _MEMORY_FILE.exists():
+            return json.loads(_MEMORY_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {"recent": [], "facts": []}
+
+def _save_mem(mem: dict) -> None:
+    mem.setdefault("facts", [])
+    _MEMORY_FILE.write_text(json.dumps(mem, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def remember(fact: str, category: str = "general") -> str:
+    """
+    Save a durable fact about Kalo or his world to long-term memory.
+    Use this whenever Kalo tells you something worth remembering across sessions:
+    his preferences, names of people/pets, his projects, schedules, decisions, etc.
+    """
+    fact = (fact or "").strip()
+    if not fact:
+        return "Nothing to remember."
+    mem = _load_mem()
+    facts = mem.setdefault("facts", [])
+    # de-dupe (case-insensitive substring match)
+    low = fact.lower()
+    for f in facts:
+        if f.get("text", "").lower() == low:
+            return "Already remembered that."
+    facts.append({
+        "text": fact,
+        "category": category,
+        "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
+    })
+    _save_mem(mem)
+    return f"Remembered: {fact}"
+
+
+def recall(query: str = "") -> str:
+    """
+    Search long-term memory for facts about Kalo. With no query, returns everything.
+    (Relevant facts are already auto-injected each turn; use this for explicit lookups.)
+    """
+    facts = _load_mem().get("facts", [])
+    if not facts:
+        return "I don't have anything in long-term memory yet."
+    q = (query or "").lower().strip()
+    if q:
+        hits = [f for f in facts if q in f.get("text", "").lower()
+                or q in f.get("category", "").lower()]
+    else:
+        hits = facts
+    if not hits:
+        return f"Nothing in memory about '{query}'."
+    return " | ".join(f["text"] for f in hits[:25])
+
+
+def forget(query: str) -> str:
+    """
+    Remove facts from long-term memory that match the query (case-insensitive).
+    Use when Kalo says 'forget that', 'that's wrong', or asks to delete a memory.
+    """
+    q = (query or "").lower().strip()
+    if not q:
+        return "Tell me what to forget."
+    mem = _load_mem()
+    facts = mem.get("facts", [])
+    keep = [f for f in facts if q not in f.get("text", "").lower()]
+    removed = len(facts) - len(keep)
+    mem["facts"] = keep
+    _save_mem(mem)
+    return f"Forgot {removed} item(s)." if removed else f"Nothing matched '{query}'."
+
+
 # ─── OS Operator Agent ───────────────────────────────────────────────────────
 
 def run_os_task(task: str) -> str:
@@ -1059,6 +1140,10 @@ def execute_tool(name: str, inputs: Dict[str, Any]):
         "reload_ui":        lambda i: reload_ui(),
         "restart_backend":  lambda i: restart_backend(),
         "clear_chat_log":   lambda i: clear_chat_log(),
+        # Long-term memory
+        "remember":         lambda i: remember(i["fact"], i.get("category", "general")),
+        "recall":           lambda i: recall(i.get("query", "")),
+        "forget":           lambda i: forget(i["query"]),
         # Operator agent
         "run_os_task":      lambda i: run_os_task(i["task"]),
         # Browser automation
@@ -1541,6 +1626,51 @@ TOOLS_DEFINITION = [
             "clear the screen, or start fresh."
         ),
         "input_schema": {"type": "object", "properties": {}}
+    },
+    {
+        "name": "remember",
+        "description": (
+            "Save a durable fact about Kalo to long-term memory (persists across sessions). "
+            "Use PROACTIVELY whenever Kalo shares something worth keeping: his name, preferences, "
+            "people/pets in his life, his projects, schedules, habits, decisions, or anything he "
+            "says to remember. Phrase the fact as a short standalone statement."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "fact": {"type": "string", "description": "The fact to store, e.g. 'Kalo's dog is named Rex' or 'Kalo prefers metric units'"},
+                "category": {"type": "string", "description": "Optional grouping label, e.g. 'personal', 'preferences', 'projects'"}
+            },
+            "required": ["fact"]
+        }
+    },
+    {
+        "name": "recall",
+        "description": (
+            "Search long-term memory for facts about Kalo. Relevant memories are already "
+            "injected into your context automatically each turn, so only call this for an "
+            "explicit lookup (e.g. Kalo asks 'what do you know about me?'). Empty query returns everything."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Keyword to search for; omit to list all memories"}
+            }
+        }
+    },
+    {
+        "name": "forget",
+        "description": (
+            "Delete facts from long-term memory matching a query. Use when Kalo says 'forget that', "
+            "corrects a wrong memory, or asks you to delete something you remembered."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Text to match; all facts containing it are removed"}
+            },
+            "required": ["query"]
+        }
     },
     # ── OS Operator Agent ─────────────────────────────────────────────────────
     {

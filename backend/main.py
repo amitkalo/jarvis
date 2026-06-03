@@ -170,7 +170,16 @@ _BASE_SYSTEM = (
     "  → read_file → edit_file or create_file → reload_ui()\n"
     "- Backend (auto-restart): backend/tools.py, main.py, operator_agent.py\n"
     "  → read_file → edit_file or create_file → restart_backend()\n"
-    "- Always read_file first. Confirm change in one sentence."
+    "- Always read_file first. Confirm change in one sentence.\n\n"
+
+    "MEMORY (you remember things across sessions):\n"
+    "- Use `remember` PROACTIVELY whenever Kalo shares a durable fact about himself, "
+    "his preferences, people/pets, projects, or plans — don't wait to be asked.\n"
+    "- Facts you already know are injected each turn under 'WHAT YOU KNOW ABOUT KALO' — "
+    "treat them as established and never re-ask what you already know.\n"
+    "- Use `forget` when Kalo corrects you or asks you to drop something.\n"
+    "- The 'RECENT ACTIONS this session' block lists results of tools you just ran "
+    "(e.g. a screenshot's file path) — reuse those exact values instead of guessing."
 )
 
 def build_system_prompt(mem: Dict) -> str:
@@ -532,6 +541,54 @@ import re as _re
 
 _delivery_queue: asyncio.Queue = asyncio.Queue()
 
+# ── Working memory: what Jarvis has just DONE this session ────────────────────
+# Captures tool calls + their results (e.g. "take_screenshot -> C:\...\shot.png")
+# so the next turn knows things like where a file was just saved. Injected into
+# the system prompt each turn. This is short-term/session memory.
+_session_actions: list[str] = []
+_SESSION_ACTIONS_MAX = 15
+
+def _record_action(tool: str, inputs, result) -> None:
+    inp = json.dumps(inputs)[:60] if inputs else ""
+    res = ("[image]" if isinstance(result, list) else str(result))[:140]
+    _session_actions.append(f"{tool}({inp}) -> {res}")
+    del _session_actions[:-_SESSION_ACTIONS_MAX]
+
+def _working_memory_block() -> str:
+    if not _session_actions:
+        return ""
+    lines = "\n".join(f"  - {a}" for a in _session_actions[-8:])
+    return ("\n\nRECENT ACTIONS this session (use these exact results — e.g. file "
+            f"paths you just created/saved):\n{lines}\n")
+
+
+def _recall_block(query: str) -> str:
+    """
+    Inject Jarvis's long-term knowledge about Kalo (the persistent fact store)
+    into the system prompt. Pure JSON read + keyword ranking — no ML model, so
+    it adds essentially zero runtime cost.
+    """
+    try:
+        facts = load_memory().get("facts", [])
+    except Exception:
+        facts = []
+    if not facts:
+        return ""
+
+    # Few facts → include them all. Many → keyword-rank against the query.
+    if len(facts) <= 30:
+        chosen = facts
+    else:
+        qwords = set(_re.findall(r"\w+", (query or "").lower()))
+        def _score(f):
+            fwords = set(_re.findall(r"\w+", f.get("text", "").lower()))
+            return len(qwords & fwords)
+        chosen = sorted(facts, key=_score, reverse=True)[:18]
+
+    lines = "\n".join(f"  - {f.get('text', '')}" for f in chosen)
+    return ("\n\nWHAT YOU KNOW ABOUT KALO (long-term memory — treat as established "
+            f"fact, don't re-ask):\n{lines}\n")
+
 # Sentence boundary: end-of-sentence punctuation followed by whitespace or EOL
 _SENT_END_RE = _re.compile(r'(?<=[.!?…])\s+|(?<=[.!?…])$')
 
@@ -595,6 +652,7 @@ async def _run_tool_loop(
                         "type": "tool_result", "name": block.name,
                         "result": "[screen]" if isinstance(result, list) else str(result)[:200],
                     })
+                    _record_action(block.name, block.input, result)   # remember what we did
                     tool_results.append({
                         "type":        "tool_result",
                         "tool_use_id": block.id,
@@ -632,6 +690,10 @@ async def _bg_turn(tid: int, messages: list, query: str, memory: Dict) -> None:
             system = m.get("content", "")
         else:
             msgs.append(m)
+
+    # Augment the system prompt with what Jarvis has just done + relevant memories
+    system += _working_memory_block()
+    system += _recall_block(query)
 
     await broadcast({"type": "bg_thinking", "tid": tid, "query": query[:60]})
     ilog(f"[Turn {tid}] → '{query[:50]}'")
