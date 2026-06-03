@@ -29,3 +29,9 @@ pywin32>=306
 numpy>=1.26.0
 scipy>=1.11.0
 miniaudio>=1.60             # used by tools.py audio helpers if any
+
+# ── Speaker verification (only obey the enrolled owner's voice) ──────────────
+resemblyzer>=0.1.4          # d-vector speaker encoder for backend/speaker_id.py
+
+# ── Browser automation (backend/tools.py browser_* tools) ────────────────────
+playwright>=1.40.0          # run `playwright install chromium` after pip install

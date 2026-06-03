@@ -69,6 +69,7 @@ VAD_STOP_SECS     = 0.8     # silence before a speech SEGMENT closes (→ Whispe
 VAD_START_SECS    = 0.3     # sustained speech needed to OPEN a turn
 VAD_MIN_VOLUME    = 0.6     # volume floor — raised from 0.1 so speaker echo doesn't fake a barge-in
 TURN_PAUSE_SECS   = 2.0     # total silence after which the turn ends and Claude is called
+SPEAKER_LOCK      = True    # only obey the enrolled owner's voice (if jarvis_voiceprint.npy exists)
 
 # ─── First-run greeting ───────────────────────────────────────────────────────
 _GREETED_PATH = Path(__file__).parent.parent / "jarvis_greeted.flag"
@@ -365,6 +366,73 @@ class EchoGate(FrameProcessor):
         # Drop mic audio while bot is talking
         if isinstance(frame, InputAudioRawFrame) and self._bot_speaking:
             return
+
+        await self.push_frame(frame, direction)
+
+
+# ─── Speaker verification gate ───────────────────────────────────────────────
+
+class SpeakerGate(FrameProcessor):
+    """
+    Only lets the enrolled owner's speech through.
+
+    Sits right after Whisper: buffers the raw mic audio (which STT passes
+    downstream), and when a TranscriptionFrame arrives, verifies the buffered
+    audio against the enrolled voiceprint. If it doesn't match, the
+    TranscriptionFrame is DROPPED — user_agg never sees it, so no turn fires
+    and Jarvis stays silent for that speaker.
+
+    Fails OPEN: if no voiceprint is enrolled, every speaker is accepted.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._buf = bytearray()
+        self._sr  = 16000
+        self._max_bytes = 16000 * 2 * 12      # cap buffer at ~12s of int16 PCM
+        from speaker_id import VoiceID
+        self._vid     = VoiceID()
+        self._enabled = SPEAKER_LOCK and self._vid.is_enrolled()
+        if self._enabled:
+            ilog(f"SpeakerGate: ON — only the enrolled voice will be obeyed "
+                 f"(threshold {self._vid.threshold})")
+        elif SPEAKER_LOCK:
+            ilog("SpeakerGate: no voiceprint yet — accepting all speakers. "
+                 "Run `python backend/enroll_voice.py` to lock to your voice.")
+        else:
+            ilog("SpeakerGate: disabled by config (SPEAKER_LOCK=False).")
+
+    async def process_frame(self, frame: Frame, direction) -> None:
+        await super().process_frame(frame, direction)
+
+        # Accumulate mic audio
+        if isinstance(frame, InputAudioRawFrame):
+            if self._enabled:
+                self._sr = getattr(frame, "sample_rate", self._sr) or self._sr
+                self._buf.extend(frame.audio)
+                if len(self._buf) > self._max_bytes:
+                    del self._buf[: len(self._buf) - self._max_bytes]
+            await self.push_frame(frame, direction)
+            return
+
+        # Verify the speaker when a transcription is produced
+        if isinstance(frame, TranscriptionFrame) and self._enabled:
+            import numpy as np
+            ok, score = True, 1.0
+            if len(self._buf) >= self._sr * 2:        # need ≥1s of audio to judge
+                pcm = np.frombuffer(bytes(self._buf), dtype=np.int16).astype(np.float32) / 32768.0
+                ok, score = self._vid.verify(pcm, self._sr)
+            self._buf.clear()
+
+            if not ok:
+                ilog(f"SpeakerGate: IGNORED unknown speaker "
+                     f"(score {score:.2f} < {self._vid.threshold}) — '{frame.text}'")
+                await broadcast({
+                    "type": "ignored_speaker",
+                    "text": frame.text,
+                    "score": round(score, 2),
+                })
+                return    # drop — do not forward to user_agg
 
         await self.push_frame(frame, direction)
 
@@ -696,6 +764,7 @@ async def _run_pipeline() -> None:
 
     broadcaster    = JarvisBroadcaster()
     turn_disp      = TurnDispatcher(memory)
+    speaker_gate   = SpeakerGate()   # drops speech that isn't the enrolled owner
 
     # ── Pipeline layout ───────────────────────────────────────────────────────
     # broadcaster is NOW before user_agg so it intercepts TranscriptionFrame
@@ -714,7 +783,8 @@ async def _run_pipeline() -> None:
         pipeline_procs = [
             transport.input(),   # raw mic audio
             stt,                 # Whisper → TranscriptionFrame
-            broadcaster,         # ← MOVED before user_agg: sees TranscriptionFrame ✓
+            speaker_gate,        # ← drops non-owner speech before it can trigger a turn
+            broadcaster,         # ← before user_agg: sees TranscriptionFrame ✓
             user_agg,            # VAD + turn collection → LLMContextFrame
             turn_disp,           # fires asyncio background task per turn; never blocks
             tts,                 # Piper TTS — receives TTSSpeakFrame injected by turn_disp
@@ -727,6 +797,7 @@ async def _run_pipeline() -> None:
             transport.input(),
             echo_gate,
             stt,
+            speaker_gate,
             broadcaster,
             user_agg,
             turn_disp,

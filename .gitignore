@@ -6,6 +6,10 @@ jarvis.log
 jarvis_mic.json
 jarvis_memory.json
 jarvis_greeted.flag
+jarvis_voiceprint.npy      # personal biometric voiceprint — do NOT commit
+
+# Browser automation persistent profile (logins, cookies)
+jarvis_browser_profile/
 
 # Python
 __pycache__/

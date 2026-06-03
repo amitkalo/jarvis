@@ -553,6 +553,11 @@ function connect() {
         addActivity("act-tool", "🖥", msg.text || "");
         break;
 
+      case "ignored_speaker":
+        // Speaker verification rejected this utterance (not the owner)
+        addActivity("act-state", "🔒", `Ignored (not you): "${(msg.text || "").slice(0, 40)}"`);
+        break;
+
       case "clear_log":
         // Triggered when you ask Jarvis to clear the chat
         clearChatLog();
