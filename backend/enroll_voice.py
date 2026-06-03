@@ -43,6 +43,12 @@ def record(seconds: int, device_index: int | None) -> np.ndarray:
     stream = p.open(**kwargs)
     frames = []
     total_chunks = int(SAMPLE_RATE / CHUNK * seconds)
+
+    # Get-ready countdown so you're not caught mid-breath
+    print("\n  Get ready to speak...")
+    for c in (3, 2, 1):
+        print(f"     {c}...", end="\r", flush=True)
+        time.sleep(1)
     print(f"\n🎙  Recording {seconds}s — talk naturally NOW "
           f"(read anything, keep speaking)...\n")
     for i in range(total_chunks):
