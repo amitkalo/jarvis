@@ -62,11 +62,13 @@ load_dotenv(dotenv_path=_ENV_PATH, encoding="utf-8", override=True)
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 MODEL             = "claude-sonnet-4-6"
 WS_PORT           = 8765
-WHISPER_MODEL     = "tiny"   # "tiny"=~1s latency on CPU  |  "small"=~9s
-VAD_STOP_SECS     = 0.2     # silence needed to close a turn (s)
-VAD_START_SECS    = 0.4     # sustained speech needed to OPEN a turn (raised: stops echo triggering barge-in)
+WHISPER_MODEL     = "base"  # "tiny"=fast/inaccurate | "base"=balanced | "small"=accurate/slow
+VAD_STOP_SECS     = 0.8     # silence before a speech SEGMENT closes (→ Whisper transcribes it).
+                            # Was 0.2 — too aggressive: chopped sentences mid-phrase, dropping words.
+                            # 0.8 keeps natural micro-pauses inside one clean chunk for Whisper.
+VAD_START_SECS    = 0.3     # sustained speech needed to OPEN a turn
 VAD_MIN_VOLUME    = 0.6     # volume floor — raised from 0.1 so speaker echo doesn't fake a barge-in
-TURN_PAUSE_SECS   = 2.5     # wait this long after voice stops before sending to Claude
+TURN_PAUSE_SECS   = 2.0     # total silence after which the turn ends and Claude is called
 
 # ─── First-run greeting ───────────────────────────────────────────────────────
 _GREETED_PATH = Path(__file__).parent.parent / "jarvis_greeted.flag"

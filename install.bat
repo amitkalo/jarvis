@@ -62,8 +62,8 @@ if not exist ".env" (
 
 :: ── Whisper model pre-download ───────────────────────────────────────────────
 echo.
-echo [4/5] Pre-downloading Whisper models (tiny + small, ~275 MB total)...
-python -c "from faster_whisper import WhisperModel; WhisperModel('tiny', device='cpu', compute_type='int8'); WhisperModel('small', device='cpu', compute_type='int8'); print('Whisper models ready.')"
+echo [4/5] Pre-downloading Whisper model (base, ~145 MB)...
+python -c "from faster_whisper import WhisperModel; WhisperModel('base', device='cpu', compute_type='int8'); print('Whisper model ready.')"
 
 :: ── Piper TTS local voice ─────────────────────────────────────────────────────
 echo.
