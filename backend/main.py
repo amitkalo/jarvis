@@ -174,13 +174,30 @@ _BASE_SYSTEM = (
 )
 
 def build_system_prompt(mem: Dict) -> str:
+    prompt = _BASE_SYSTEM
+
+    # Tell Claude whether voice-lock is active so it can answer "do you know my voice?"
+    voiceprint = Path(__file__).parent.parent / "jarvis_voiceprint.npy"
+    if SPEAKER_LOCK and voiceprint.exists():
+        prompt += (
+            "\n\nVOICE LOCK: Speaker verification is ACTIVE. Every word you receive has "
+            "already been confirmed as Kalo's voice — anyone else is silently filtered out "
+            "before reaching you. So yes, you DO recognise Kalo's voice; if asked, confirm it.\n"
+        )
+    else:
+        prompt += (
+            "\n\nVOICE LOCK: Speaker verification is OFF (no voiceprint enrolled yet). "
+            "You currently respond to anyone. If Kalo asks, tell them to run the enrollment "
+            "(it happens automatically on the next start.bat launch).\n"
+        )
+
     recent = mem.get("recent", [])
-    if not recent:
-        return _BASE_SYSTEM
-    lines = ["\n\nRecent memory (context about Kalo's past requests):"]
-    for e in recent[-5:]:
-        lines.append(f'  [{e["time"]}] "{e["q"]}" -> "{e["r"]}"')
-    return _BASE_SYSTEM + "\n".join(lines)
+    if recent:
+        lines = ["\nRecent memory (context about Kalo's past requests):"]
+        for e in recent[-5:]:
+            lines.append(f'  [{e["time"]}] "{e["q"]}" -> "{e["r"]}"')
+        prompt += "\n".join(lines)
+    return prompt
 
 # ─── Mic config ───────────────────────────────────────────────────────────────
 _MIC_CONFIG_PATH = Path(__file__).parent.parent / "jarvis_mic.json"
