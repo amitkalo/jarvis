@@ -389,69 +389,133 @@ class EchoGate(FrameProcessor):
 
 # ─── Speaker verification gate ───────────────────────────────────────────────
 
+ENROLL_TARGET_SECS = 6.0   # voiced seconds of the owner needed to build a voiceprint
+
+
 class SpeakerGate(FrameProcessor):
     """
-    Only lets the enrolled owner's speech through.
+    Locks Jarvis to the owner's voice, with VOICE-DRIVEN enrollment.
 
-    Sits right after Whisper: buffers the raw mic audio (which STT passes
-    downstream), and when a TranscriptionFrame arrives, verifies the buffered
-    audio against the enrolled voiceprint. If it doesn't match, the
-    TranscriptionFrame is DROPPED — user_agg never sees it, so no turn fires
-    and Jarvis stays silent for that speaker.
+    Sits right after Whisper. Two modes:
 
-    Fails OPEN: if no voiceprint is enrolled, every speaker is accepted.
+    ENROLL  (no voiceprint yet): Jarvis greets the user and asks them to speak.
+            The gate accumulates their audio across utterances; once it has
+            ~ENROLL_TARGET_SECS of voiced speech it builds the voiceprint and
+            switches to VERIFY. Enrollment chatter is NOT sent to Claude.
+
+    VERIFY  (voiceprint exists): every transcription is checked against the
+            voiceprint; non-matching speech is DROPPED before it can trigger a
+            turn, so Jarvis stays silent for anyone who isn't the owner.
+
+    If SPEAKER_LOCK is False, the gate is a transparent pass-through.
     """
 
     def __init__(self) -> None:
         super().__init__()
         self._buf = bytearray()
         self._sr  = 16000
-        self._max_bytes = 16000 * 2 * 12      # cap buffer at ~12s of int16 PCM
+        self._max_bytes = 16000 * 2 * 12      # cap rolling buffer at ~12s int16 PCM
         from speaker_id import VoiceID
-        self._vid     = VoiceID()
-        self._enabled = SPEAKER_LOCK and self._vid.is_enrolled()
-        if self._enabled:
-            ilog(f"SpeakerGate: ON — only the enrolled voice will be obeyed "
-                 f"(threshold {self._vid.threshold})")
-        elif SPEAKER_LOCK:
-            ilog("SpeakerGate: no voiceprint yet — accepting all speakers. "
-                 "Run `python backend/enroll_voice.py` to lock to your voice.")
-        else:
-            ilog("SpeakerGate: disabled by config (SPEAKER_LOCK=False).")
+        self._vid = VoiceID()
 
+        if not SPEAKER_LOCK:
+            self._mode = "off"
+            ilog("SpeakerGate: disabled by config (SPEAKER_LOCK=False).")
+        elif self._vid.is_enrolled():
+            self._mode = "verify"
+            ilog(f"SpeakerGate: VERIFY — locked to the enrolled voice "
+                 f"(threshold {self._vid.threshold}).")
+        else:
+            self._mode = "enroll"
+            self._enroll_pcm = bytearray()   # accumulates owner audio across utterances
+            ilog("SpeakerGate: ENROLL — will learn the owner's voice on first speech.")
+
+    # ── helpers ──────────────────────────────────────────────────────────────
+    async def _speak(self, text: str) -> None:
+        """Make Jarvis say something by injecting a TTSSpeakFrame downstream."""
+        await self.push_frame(TTSSpeakFrame(text), FrameDirection.DOWNSTREAM)
+
+    async def announce_enrollment(self) -> None:
+        """Called once after the pipeline is ready, if we're in enroll mode."""
+        if self._mode == "enroll":
+            await self._speak(
+                "Hello! I don't know your voice yet. Please say hello and tell me "
+                "a little about yourself for a few seconds, so I can learn it."
+            )
+            await broadcast({"type": "enroll_status", "text": "Learning your voice — keep talking…"})
+
+    def _pcm_from(self, buf: bytearray):
+        import numpy as np
+        return np.frombuffer(bytes(buf), dtype=np.int16).astype(np.float32) / 32768.0
+
+    # ── main frame handler ───────────────────────────────────────────────────
     async def process_frame(self, frame: Frame, direction) -> None:
         await super().process_frame(frame, direction)
 
-        # Accumulate mic audio
-        if isinstance(frame, InputAudioRawFrame):
-            if self._enabled:
-                self._sr = getattr(frame, "sample_rate", self._sr) or self._sr
-                self._buf.extend(frame.audio)
-                if len(self._buf) > self._max_bytes:
-                    del self._buf[: len(self._buf) - self._max_bytes]
+        if self._mode == "off":
             await self.push_frame(frame, direction)
             return
 
-        # Verify the speaker when a transcription is produced
-        if isinstance(frame, TranscriptionFrame) and self._enabled:
-            import numpy as np
-            ok, score = True, 1.0
-            if len(self._buf) >= self._sr * 2:        # need ≥1s of audio to judge
-                pcm = np.frombuffer(bytes(self._buf), dtype=np.int16).astype(np.float32) / 32768.0
-                ok, score = self._vid.verify(pcm, self._sr)
-            self._buf.clear()
+        # Accumulate mic audio into the rolling buffer
+        if isinstance(frame, InputAudioRawFrame):
+            self._sr = getattr(frame, "sample_rate", self._sr) or self._sr
+            self._buf.extend(frame.audio)
+            if len(self._buf) > self._max_bytes:
+                del self._buf[: len(self._buf) - self._max_bytes]
+            await self.push_frame(frame, direction)
+            return
 
-            if not ok:
-                ilog(f"SpeakerGate: IGNORED unknown speaker "
-                     f"(score {score:.2f} < {self._vid.threshold}) — '{frame.text}'")
-                await broadcast({
-                    "type": "ignored_speaker",
-                    "text": frame.text,
-                    "score": round(score, 2),
-                })
-                return    # drop — do not forward to user_agg
+        if isinstance(frame, TranscriptionFrame):
+            if self._mode == "enroll":
+                await self._handle_enroll(frame)
+                return    # never forward enrollment speech to Claude
+            elif self._mode == "verify":
+                if not await self._handle_verify(frame):
+                    return    # dropped — unknown speaker
 
         await self.push_frame(frame, direction)
+
+    # ── enroll mode ──────────────────────────────────────────────────────────
+    async def _handle_enroll(self, frame: TranscriptionFrame) -> None:
+        # Append this utterance's audio to the enrollment accumulator
+        self._enroll_pcm.extend(self._buf)
+        self._buf.clear()
+
+        pcm = self._pcm_from(self._enroll_pcm)
+        voiced = self._vid.voiced_seconds(pcm, self._sr)
+        ilog(f"SpeakerGate[enroll]: '{frame.text}' — {voiced:.1f}s voiced so far")
+        await broadcast({"type": "enroll_status",
+                         "text": f"Learning your voice… {voiced:.0f}/{int(ENROLL_TARGET_SECS)}s"})
+
+        if voiced >= ENROLL_TARGET_SECS:
+            try:
+                self._vid.enroll([pcm], self._sr)
+                self._mode = "verify"
+                self._enroll_pcm = bytearray()
+                ilog("SpeakerGate: voiceprint created — now locked to the owner.")
+                await broadcast({"type": "enroll_status", "text": "Voice learned — locked to you."})
+                await broadcast({"type": "enrolled"})
+                await self._speak("Got it — I've learned your voice. I'll only respond to you now. How can I help?")
+            except Exception as exc:
+                ilog(f"SpeakerGate: enroll failed ({exc}) — asking for more speech.")
+                await self._speak("Sorry, I didn't catch enough. Please keep talking for a few more seconds.")
+        else:
+            await self._speak("Great, keep going — tell me a bit more.")
+
+    # ── verify mode ──────────────────────────────────────────────────────────
+    async def _handle_verify(self, frame: TranscriptionFrame) -> bool:
+        ok, score = True, 1.0
+        if len(self._buf) >= self._sr * 2:        # need ≥1s of audio to judge
+            ok, score = self._vid.verify(self._pcm_from(self._buf), self._sr)
+        self._buf.clear()
+
+        verdict = "ACCEPT" if ok else "IGNORE"
+        ilog(f"SpeakerGate[verify]: {verdict} score={score:.2f} thr={self._vid.threshold} — '{frame.text}'")
+
+        if not ok:
+            await broadcast({"type": "ignored_speaker", "text": frame.text, "score": round(score, 2)})
+            return False
+        return True
 
 
 # ─── Parallel LLM engine ─────────────────────────────────────────────────────
@@ -842,8 +906,14 @@ async def _run_pipeline() -> None:
     # ── Start the response delivery loop ─────────────────────────────────────
     turn_disp.start_delivery_loop()
 
-    # ── First-run greeting via Piper TTS ─────────────────────────────────────
-    if _is_first_run():
+    # ── Voice enrollment prompt OR first-run greeting ────────────────────────
+    if getattr(speaker_gate, "_mode", "") == "enroll":
+        # No voiceprint yet → ask the owner to speak so we can learn their voice
+        async def _prompt_enroll():
+            await asyncio.sleep(5)   # wait for Whisper + Piper to finish loading
+            await speaker_gate.announce_enrollment()
+        asyncio.create_task(_prompt_enroll())
+    elif _is_first_run():
         asyncio.create_task(_piper_greeting(broadcaster))
 
     runner = WorkerRunner()

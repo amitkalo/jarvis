@@ -558,6 +558,16 @@ function connect() {
         addActivity("act-state", "🔒", `Ignored (not you): "${(msg.text || "").slice(0, 40)}"`);
         break;
 
+      case "enroll_status":
+        // Voice enrollment in progress
+        statusLabel.textContent = msg.text || "Learning your voice…";
+        addActivity("act-think", "🎓", msg.text || "Learning your voice…");
+        break;
+
+      case "enrolled":
+        addActivity("act-result", "🔐", "Voice learned — Jarvis is now locked to you");
+        break;
+
       case "clear_log":
         // Triggered when you ask Jarvis to clear the chat
         clearChatLog();

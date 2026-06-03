@@ -19,9 +19,11 @@ import numpy as np
 
 _VOICEPRINT_PATH = Path(__file__).parent.parent / "jarvis_voiceprint.npy"
 
-# Cosine-similarity threshold. Resemblyzer same-speaker ≈ 0.75-0.9, different ≈ 0-0.5.
-# 0.70 is a balanced default; raise to be stricter, lower to be more permissive.
-DEFAULT_THRESHOLD = 0.70
+# Cosine-similarity threshold. In practice on this mic the owner scores ~0.60-0.70
+# and other speakers ~0.45-0.55, so 0.57 sits in the gap: owner passes, others fail.
+# Raise toward 0.65 to be stricter (may reject the owner on short words),
+# lower toward 0.50 to be more permissive (may let similar voices through).
+DEFAULT_THRESHOLD = 0.57
 
 
 class VoiceID:
@@ -57,6 +59,15 @@ class VoiceID:
         if wav is None or len(wav) < 16000 * 0.4:   # <0.4s of voiced speech
             return None
         return self._enc().embed_utterance(wav)
+
+    def voiced_seconds(self, pcm_float: np.ndarray, sr: int) -> float:
+        """Return the duration (s) of actual voiced speech after silence trimming."""
+        from resemblyzer import preprocess_wav
+        try:
+            wav = preprocess_wav(pcm_float, source_sr=sr)
+        except Exception:
+            return 0.0
+        return len(wav) / 16000.0 if wav is not None else 0.0
 
     # ── public API ───────────────────────────────────────────────────────────
     def is_enrolled(self) -> bool:
