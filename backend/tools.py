@@ -761,6 +761,15 @@ def restart_backend() -> str:
     return "Backend restart signal sent — reconnecting in ~3 seconds."
 
 
+def clear_chat_log() -> str:
+    """
+    Clear the chat log shown in the Jarvis UI right panel.
+    Call this when the user asks to clear the chat, wipe the log, or start fresh.
+    """
+    _async_broadcast({"type": "clear_log"})
+    return "Chat log cleared."
+
+
 # ─── OS Operator Agent ───────────────────────────────────────────────────────
 
 def run_os_task(task: str) -> str:
@@ -1049,6 +1058,7 @@ def execute_tool(name: str, inputs: Dict[str, Any]):
         "edit_file":        lambda i: edit_file(i["path"], i["search"], i["replace"]),
         "reload_ui":        lambda i: reload_ui(),
         "restart_backend":  lambda i: restart_backend(),
+        "clear_chat_log":   lambda i: clear_chat_log(),
         # Operator agent
         "run_os_task":      lambda i: run_os_task(i["task"]),
         # Browser automation
@@ -1520,6 +1530,15 @@ TOOLS_DEFINITION = [
             "Call this after editing backend/main.py, backend/tools.py, or backend/operator_agent.py. "
             "The Electron window stays open and the frontend reconnects automatically in ~3 seconds. "
             "Do NOT call this after frontend edits — use reload_ui instead."
+        ),
+        "input_schema": {"type": "object", "properties": {}}
+    },
+    {
+        "name": "clear_chat_log",
+        "description": (
+            "Clear the chat log shown in the Jarvis UI. "
+            "Call this when the user asks to clear the chat, wipe the conversation log, "
+            "clear the screen, or start fresh."
         ),
         "input_schema": {"type": "object", "properties": {}}
     },

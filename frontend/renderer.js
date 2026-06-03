@@ -27,43 +27,22 @@ const canvasWrap     = document.getElementById("canvas-wrap");
 const statusLabel    = document.getElementById("status-label");
 const queryText      = document.getElementById("query-text");
 const operatorStatus = document.getElementById("operator-status");
-const triggerBtn     = document.getElementById("trigger-btn");
 const commLog        = document.getElementById("comm-log");
 const activityLog    = document.getElementById("activity-log");
 const ampFill        = document.getElementById("amp-fill");
-const svalTool       = document.getElementById("sval-tool");
 const svalDate       = document.getElementById("sval-date");
 const svalUptime     = document.getElementById("sval-uptime");
 const clockEl        = document.getElementById("clock");
 
-// ── Tab switching ──────────────────────────────────────────────────────────────
-const tabBtns = document.querySelectorAll(".tab-btn");
-tabBtns.forEach(btn => {
-  btn.addEventListener("click", () => {
-    tabBtns.forEach(b => b.classList.remove("active"));
-    btn.classList.add("active");
-    const tab = btn.dataset.tab;
-    commLog.style.display    = tab === "log"      ? "flex" : "none";
-    activityLog.style.display = tab === "activity" ? "flex" : "none";
-  });
-});
-
-// ── Activity feed ──────────────────────────────────────────────────────────────
-const ACT_MAX = 120;   // max entries before oldest are pruned
-
-function _actTs() {
-  const n = new Date();
-  return `${String(n.getHours()).padStart(2,"0")}:${String(n.getMinutes()).padStart(2,"0")}:${String(n.getSeconds()).padStart(2,"0")}`;
-}
+// ── Live activity feed (left panel, always visible) ─────────────────────────────
+const ACT_MAX = 80;   // max entries before oldest are pruned
 
 function addActivity(kind, icon, body) {
   // kind: act-think | act-tool | act-result | act-answer | act-state | act-error
+  if (!activityLog) return;
+
   const row  = document.createElement("div");
   row.className = `act ${kind}`;
-
-  const ts   = document.createElement("span");
-  ts.className = "act-ts";
-  ts.textContent = _actTs();
 
   const ic   = document.createElement("span");
   ic.className = "act-icon";
@@ -73,7 +52,6 @@ function addActivity(kind, icon, body) {
   bd.className = "act-body";
   bd.textContent = body;
 
-  row.appendChild(ts);
   row.appendChild(ic);
   row.appendChild(bd);
   activityLog.appendChild(row);
@@ -83,17 +61,6 @@ function addActivity(kind, icon, body) {
     activityLog.removeChild(activityLog.firstChild);
   }
   activityLog.scrollTop = activityLog.scrollHeight;
-
-  // Also badge the tab if not currently visible
-  const tabActivity = document.getElementById("tab-activity");
-  if (!tabActivity.classList.contains("active")) {
-    tabActivity.style.color = "var(--cyan)";
-    clearTimeout(tabActivity._badge);
-    tabActivity._badge = setTimeout(() => {
-      if (!tabActivity.classList.contains("active"))
-        tabActivity.style.color = "";
-    }, 2000);
-  }
 }
 
 // ── Clock + uptime ─────────────────────────────────────────────────────────────
@@ -568,7 +535,6 @@ function connect() {
 
       case "tool_use":
         statusLabel.textContent = `Running: ${msg.name}`;
-        svalTool.textContent = msg.name || "—";
         addActivity("act-tool", "🔧", `${msg.name}(${msg.args ? JSON.stringify(msg.args).slice(0,80) : "…"})`);
         if (msg.name === "run_os_task") startOperatorMode();
         break;
@@ -585,6 +551,11 @@ function connect() {
         if (!operatorRunning) startOperatorMode();
         showOperatorStatus(msg.text || "");
         addActivity("act-tool", "🖥", msg.text || "");
+        break;
+
+      case "clear_log":
+        // Triggered when you ask Jarvis to clear the chat
+        clearChatLog();
         break;
 
       case "reload":
@@ -619,28 +590,18 @@ function sendTrigger() {
   }
 }
 
-function sendClearHistory() {
-  const activeTab = document.querySelector(".tab-btn.active")?.dataset?.tab;
-  if (activeTab === "activity") {
-    activityLog.innerHTML = "";
-    return;
-  }
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: "clear_history" }));
-    commLog.innerHTML = "";
-    svalTool.textContent = "—";
-    statusLabel.textContent = "Conversation cleared.";
-  }
+// Clear the chat log — called when the backend confirms a "clear_history" voice command
+function clearChatLog() {
+  commLog.innerHTML = "";
+  statusLabel.textContent = "Conversation cleared.";
 }
 
 // ── Start ──────────────────────────────────────────────────────────────────────
 connect();
 
-// ── Button handlers ────────────────────────────────────────────────────────────
-triggerBtn.addEventListener("click", sendTrigger);
-document.getElementById("clear-btn").addEventListener("click", sendClearHistory);
-document.getElementById("btn-minimize").addEventListener("click", () => window.electronAPI?.minimize());
-document.getElementById("btn-close").addEventListener("click",    () => window.electronAPI?.close());
+// ── Window controls (kept: needed to close a frameless window) ──────────────────
+document.getElementById("btn-minimize")?.addEventListener("click", () => window.electronAPI?.minimize());
+document.getElementById("btn-close")?.addEventListener("click",    () => window.electronAPI?.close());
 
-// Global hotkey from Electron main process
+// Global hotkey (Ctrl+Shift+J) still works as a manual trigger — not a button
 if (window.electronAPI) window.electronAPI.onGlobalTrigger(() => sendTrigger());
