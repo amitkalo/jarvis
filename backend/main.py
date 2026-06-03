@@ -371,29 +371,113 @@ class EchoGate(FrameProcessor):
 # Each user turn fires an asyncio.create_task() and returns immediately.
 # The pipeline is NEVER blocked waiting for Claude.
 # Multiple turns can process concurrently; responses are delivered in FIFO order.
+#
+# Latency optimisation: _bg_turn STREAMS the Claude response.
+# As soon as a sentence boundary is detected in the token stream, that sentence
+# is pushed to _delivery_queue immediately — TTS starts on sentence 1 while
+# Claude is still generating sentence 2+.  Tool-use turns fall back to blocking.
+
+import re as _re
 
 _delivery_queue: asyncio.Queue = asyncio.Queue()
+
+# Sentence boundary: end-of-sentence punctuation followed by whitespace or EOL
+_SENT_END_RE = _re.compile(r'(?<=[.!?…])\s+|(?<=[.!?…])$')
+
+
+def _pop_sentences(buf: str) -> tuple[list[str], str]:
+    """
+    Extract all complete sentences from buf.
+    Returns (complete_list, leftover).
+    """
+    parts = _SENT_END_RE.split(buf)
+    if len(parts) <= 1:
+        return [], buf          # no sentence boundary found yet
+    # Everything except the last fragment is a complete sentence
+    complete = [s.strip() for s in parts[:-1] if s.strip()]
+    return complete, parts[-1]  # last part may be an incomplete sentence
+
+
+async def _enqueue_sentence(
+    sentence: str, tid: int, query: str, is_first: bool, memory: Dict | None
+) -> None:
+    """Broadcast UI update and push one sentence to the delivery queue."""
+    if is_first:
+        await broadcast({"type": "responding_to", "text": query[:70]})
+    await broadcast({"type": "response", "text": sentence})
+    await _delivery_queue.put({
+        "text":   sentence,
+        "query":  query  if is_first else "",
+        "tid":    tid,
+        "memory": memory if is_first else None,
+    })
+
+
+async def _run_tool_loop(
+    client: "_anthropic.AsyncAnthropic",
+    msgs: list, system: str, tools_def: list
+) -> tuple[str, list]:
+    """
+    Run the blocking (non-streaming) tool-use loop.
+    Returns (final_text_response, updated_msgs).
+    """
+    from tools import execute_tool
+    response_text = ""
+    while True:
+        resp = await client.messages.create(
+            model=MODEL, max_tokens=1024,
+            system=system, messages=msgs, tools=tools_def,
+        )
+        if resp.stop_reason == "tool_use":
+            tool_results = []
+            for block in resp.content:
+                if block.type == "tool_use":
+                    ilog(f"## TOOL:  {block.name}({block.input})")
+                    await broadcast({"type": "tool_use", "name": block.name})
+                    try:
+                        result = await asyncio.get_event_loop().run_in_executor(
+                            None, execute_tool, block.name, block.input
+                        )
+                    except Exception as exc:
+                        result = f"Tool error: {exc}"
+                    await broadcast({
+                        "type": "tool_result", "name": block.name,
+                        "result": "[screen]" if isinstance(result, list) else str(result)[:200],
+                    })
+                    tool_results.append({
+                        "type":        "tool_result",
+                        "tool_use_id": block.id,
+                        "content":     result if isinstance(result, list) else str(result),
+                    })
+            msgs = msgs + [
+                {"role": "assistant", "content": list(resp.content)},
+                {"role": "user",      "content": tool_results},
+            ]
+        else:
+            for block in resp.content:
+                if hasattr(block, "text"):
+                    response_text += block.text
+            break
+    return response_text, msgs
 
 
 async def _bg_turn(tid: int, messages: list, query: str, memory: Dict) -> None:
     """
-    Background task: call Claude API, handle tool loops, enqueue response.
+    Background task: stream Claude API, deliver sentence-by-sentence to TTS.
+    Tool-use turns fall back to the blocking loop then deliver the full reply.
     Runs completely outside the pipeline — InterruptionFrame cannot cancel it.
     """
-    from tools import TOOLS_DEFINITION, execute_tool
+    from tools import TOOLS_DEFINITION
 
-    # Build raw Anthropic tools list (same format TOOLS_DEFINITION uses)
     tools_def = [
         {"name": t["name"], "description": t["description"], "input_schema": t["input_schema"]}
         for t in TOOLS_DEFINITION
     ]
 
-    # Separate system prompt from conversation messages
     system = ""
     msgs: list = []
     for m in messages:
-        role = m.get("role", "")
-        if role == "system":
+        if m.get("role") == "system":
             system = m.get("content", "")
         else:
             msgs.append(m)
@@ -404,58 +488,71 @@ async def _bg_turn(tid: int, messages: list, query: str, memory: Dict) -> None:
     client = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
 
     try:
-        response_text = ""
-        while True:
-            resp = await client.messages.create(
-                model=MODEL,
-                max_tokens=1024,
-                system=system,
-                messages=msgs,
-                tools=tools_def,
-            )
+        full_response = ""
+        sent_count    = 0
+        is_tool_turn  = False
 
-            if resp.stop_reason == "tool_use":
-                tool_results = []
-                for block in resp.content:
-                    if block.type == "tool_use":
-                        ilog(f"## TOOL:  {block.name}({block.input})")
-                        await broadcast({"type": "tool_use", "name": block.name})
-                        try:
-                            result = await asyncio.get_event_loop().run_in_executor(
-                                None, execute_tool, block.name, block.input
+        # ── Streaming pass (pure-text turns) ────────────────────────────────
+        pending = ""
+        async with client.messages.stream(
+            model=MODEL, max_tokens=1024,
+            system=system, messages=msgs, tools=tools_def,
+        ) as stream:
+            async for event in stream:
+                etype = getattr(event, "type", None)
+
+                if etype == "content_block_start":
+                    if getattr(event.content_block, "type", None) == "tool_use":
+                        is_tool_turn = True
+                        break   # abort streaming — handle via blocking loop
+
+                elif etype == "content_block_delta":
+                    delta = getattr(event, "delta", None)
+                    if delta and getattr(delta, "type", None) == "text_delta":
+                        chunk = delta.text
+                        full_response += chunk
+                        pending       += chunk
+
+                        complete, pending = _pop_sentences(pending)
+                        for sentence in complete:
+                            await _enqueue_sentence(
+                                sentence, tid, query,
+                                is_first=(sent_count == 0), memory=memory
                             )
-                        except Exception as exc:
-                            result = f"Tool error: {exc}"
-                        await broadcast({
-                            "type": "tool_result", "name": block.name,
-                            "result": "[screen]" if isinstance(result, list) else str(result)[:200],
-                        })
-                        tool_results.append({
-                            "type":        "tool_result",
-                            "tool_use_id": block.id,
-                            "content":     result if isinstance(result, list) else str(result),
-                        })
-                # Add assistant turn + tool results and loop
-                msgs = msgs + [
-                    {"role": "assistant", "content": list(resp.content)},
-                    {"role": "user",      "content": tool_results},
-                ]
-            else:
-                for block in resp.content:
-                    if hasattr(block, "text"):
-                        response_text += block.text
-                break
+                            sent_count += 1
 
-        # Update shared context so future turns know what was said
-        if _llm_context and response_text:
-            _llm_context.add_message({"role": "assistant", "content": response_text})
+            # Flush any remaining text (no trailing punctuation)
+            if not is_tool_turn and pending.strip():
+                await _enqueue_sentence(
+                    pending.strip(), tid, query,
+                    is_first=(sent_count == 0), memory=memory
+                )
+                sent_count += 1
 
-        await _delivery_queue.put({
-            "text":   response_text,
-            "query":  query,
-            "tid":    tid,
-            "memory": memory,
-        })
+        # ── Tool-use fallback (blocking) ─────────────────────────────────────
+        if is_tool_turn:
+            full_response, _ = await _run_tool_loop(client, msgs, system, tools_def)
+            if full_response:
+                await _enqueue_sentence(
+                    full_response.strip(), tid, query,
+                    is_first=True, memory=memory
+                )
+                sent_count += 1
+
+        ilog(f"<< JARVIS (→ '{query[:40]}'): {full_response[:120]}\n{'='*55}")
+
+        # ── Persist context + memory ─────────────────────────────────────────
+        if _llm_context and full_response:
+            _llm_context.add_message({"role": "assistant", "content": full_response})
+
+        if query and full_response and memory is not None:
+            memory.setdefault("recent", []).append({
+                "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "q": query[:120],
+                "r": full_response[:160],
+            })
+            memory["recent"] = memory["recent"][-20:]
+            save_memory(memory)
 
     except Exception as exc:
         ilog(f"[Turn {tid}] error: {exc}")
@@ -480,36 +577,22 @@ class TurnDispatcher(FrameProcessor):
         asyncio.create_task(self._deliver())
 
     async def _deliver(self) -> None:
-        """Dequeue completed responses; speak each one after TTS goes idle."""
+        """
+        Dequeue sentences from _delivery_queue and speak them via Piper TTS.
+        Broadcasting and logging are handled upstream in _bg_turn / _enqueue_sentence.
+        Sentences queue up while TTS is busy — each starts as soon as the previous ends.
+        """
         while True:
             item = await _delivery_queue.get()
             # Wait until TTS finishes any current speech
             while _current_state == "speaking":
                 await asyncio.sleep(0.05)
 
-            text  = item["text"].strip()
-            query = item["query"]
-            mem   = item.get("memory", {})
-
+            text = item["text"].strip()
             if not text:
                 continue
 
-            # Tell the UI what this response is answering
-            await broadcast({"type": "responding_to", "text": query[:70]})
-            ilog(f"<< JARVIS (→ '{query[:40]}'): {text}\n{'='*55}")
-            await broadcast({"type": "response", "text": text})
-
-            # Save to rolling memory
-            if query and mem is not None:
-                mem.setdefault("recent", []).append({
-                    "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                    "q": query[:120],
-                    "r": text[:160],
-                })
-                mem["recent"] = mem["recent"][-20:]
-                save_memory(mem)
-
-            # Inject speech into the pipeline
+            # Inject this sentence into the pipeline → Piper TTS → speakers
             await self.push_frame(TTSSpeakFrame(text), FrameDirection.DOWNSTREAM)
 
     async def process_frame(self, frame: Frame, direction) -> None:
